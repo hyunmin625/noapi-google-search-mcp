@@ -28,8 +28,12 @@ Works with LM Studio, Claude Desktop, and any MCP-compatible client.
 | Google Maps Directions | Built-in (with route map screenshot) | Not available |
 | Google Weather | Built-in | Not available |
 | Google Finance | Built-in | Not available |
+| Google Videos | Built-in | Usually not available |
 | Google News | Built-in | Usually not available |
 | Google Scholar | Built-in | Not available |
+| Google Patents | Built-in | Not available |
+| Google Dataset Search | Built-in | Not available |
+| Google Jobs | Built-in | Not available |
 | Google Books | Built-in | Not available |
 | Google Images | Built-in (inline in chat) | Separate API needed |
 | Google Lens | Built-in (reverse image search) | Not available |
@@ -193,6 +197,23 @@ Search Google News for recent headlines with source and timestamp.
 
 ---
 
+### `google_videos` - Video Search
+
+Search Google Videos for video results with source, duration, publish time, URL, and snippet.
+
+**Parameters:**
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `query` | Video search query (required) | `"Python asyncio tutorial"` |
+| `num_results` | Number of results (1-10, default 5) | `5` |
+| `time_range` | Filter by recency | `"past_day"`, `"past_week"`, `"past_month"` |
+| `duration` | Filter by length | `"short"`, `"medium"`, `"long"` |
+| `site` | Limit to a video site | `"youtube.com"`, `"vimeo.com"` |
+
+Returns: title, URL, source, duration, publish time, and snippet.
+
+---
+
 ### `google_scholar` - Academic Search
 
 Search Google Scholar for papers, citations, and research.
@@ -204,6 +225,49 @@ Search Google Scholar for papers, citations, and research.
 | `num_results` | Number of results (1-10, default 5) | `5` |
 
 Returns: title, URL, authors, citation count, and snippet for each paper.
+
+---
+
+### `google_patents` - Patent Search
+
+Search Google Patents for patent documents, assignees, inventors, publication metadata, and abstracts.
+
+**Parameters:**
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `query` | Patent search query (required) | `"solid state battery electrolyte"` |
+| `num_results` | Number of results (1-10, default 5) | `5` |
+
+Returns: title, patent number when detected, assignee, inventor, publication info, URL, and snippet.
+
+---
+
+### `google_datasets` - Dataset Search
+
+Search Google Dataset Search for public datasets, providers, licenses, formats, and source links.
+
+**Parameters:**
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `query` | Dataset search query (required) | `"traffic accidents dataset"` |
+| `num_results` | Number of results (1-10, default 5) | `5` |
+
+Returns: title, provider, license, file format, updated date, URL when available, and snippet.
+
+---
+
+### `google_jobs` - Job Search
+
+Search Google Jobs for job postings by role, skill, company, and location.
+
+**Parameters:**
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `query` | Job title, skill, company, or search phrase (required) | `"machine learning engineer"` |
+| `location` | Optional city, region, or remote qualifier | `"Berlin"`, `"remote"` |
+| `num_results` | Number of results (1-10, default 5) | `5` |
+
+Returns: title, company, location, posted date/work mode when detected, URL, and snippet.
 
 ---
 
@@ -484,12 +548,40 @@ Here are example prompts you can type into LM Studio or Claude Desktop, and whic
 | *"Any recent news about the stock market?"* | `google_news` |
 | *"What happened in the Japan election?"* | `google_news` |
 
+### Videos
+| What you type | Tool called |
+|--------------|-------------|
+| *"Find recent videos about NVIDIA GPUs"* | `google_videos` |
+| *"Search short videos explaining backpropagation"* | `google_videos` |
+| *"Find YouTube videos about sourdough starter"* | `google_videos` |
+
 ### Academic Research
 | What you type | Tool called |
 |--------------|-------------|
 | *"Find papers on transformer attention mechanisms"* | `google_scholar` |
 | *"Look up academic research about CRISPR"* | `google_scholar` |
 | *"What does the research say about intermittent fasting?"* | `google_scholar` |
+
+### Patents
+| What you type | Tool called |
+|--------------|-------------|
+| *"Find patents about solid state batteries"* | `google_patents` |
+| *"Search patents assigned to NVIDIA about GPU scheduling"* | `google_patents` |
+| *"Look up patents for transformer attention acceleration"* | `google_patents` |
+
+### Datasets
+| What you type | Tool called |
+|--------------|-------------|
+| *"Find public datasets about traffic accidents"* | `google_datasets` |
+| *"Search for climate datasets with CSV downloads"* | `google_datasets` |
+| *"Find datasets for housing prices"* | `google_datasets` |
+
+### Jobs
+| What you type | Tool called |
+|--------------|-------------|
+| *"Find Python developer jobs in Berlin"* | `google_jobs` |
+| *"Search remote machine learning engineer jobs"* | `google_jobs` |
+| *"Find data analyst jobs near Seoul"* | `google_jobs` |
 
 ### Books
 | What you type | Tool called |

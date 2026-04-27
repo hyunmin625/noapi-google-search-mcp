@@ -6,8 +6,12 @@ using headless Chromium (via Playwright) and returns structured results.
 
 Tools provided:
     - google_search: Search with time filtering, site filtering, pagination, language/region
+    - google_videos: Search Google Videos for video results
     - google_news: Search Google News for recent headlines
     - google_scholar: Search Google Scholar for academic papers
+    - google_patents: Search Google Patents for patent documents
+    - google_datasets: Search Google Dataset Search for datasets
+    - google_jobs: Search Google Jobs for job postings
     - google_images: Search Google Images for image URLs
     - google_trends: Check Google Trends for topic interest over time
     - google_maps: Search Google Maps for places, restaurants, businesses
@@ -55,6 +59,12 @@ TIME_RANGE_MAP = {
     "past_week": "qdr:w",
     "past_month": "qdr:m",
     "past_year": "qdr:y",
+}
+
+VIDEO_DURATION_MAP = {
+    "short": "dur:s",
+    "medium": "dur:m",
+    "long": "dur:l",
 }
 
 
@@ -262,6 +272,176 @@ async def google_search(
         page=page,
         language=language or None,
         region=region or None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# google_videos
+# ---------------------------------------------------------------------------
+
+async def _do_google_videos(
+    query: str,
+    num_results: int = 5,
+    time_range: str | None = None,
+    duration: str | None = None,
+    site: str | None = None,
+) -> str:
+    """Launch headless Chromium, search Google Videos, and scrape results."""
+    search_query = query
+    if site:
+        search_query = f"site:{site} {search_query}"
+
+    encoded_query = quote_plus(search_query)
+    url = f"https://www.google.com/search?q={encoded_query}&hl=en&tbm=vid&num={num_results + 5}"
+
+    filters = []
+    if time_range and time_range in TIME_RANGE_MAP:
+        filters.append(TIME_RANGE_MAP[time_range])
+    if duration and duration in VIDEO_DURATION_MAP:
+        filters.append(VIDEO_DURATION_MAP[duration])
+    if filters:
+        url += f"&tbs={','.join(filters)}"
+
+    async with async_playwright() as pw:
+        browser, context = await _launch_browser(pw)
+        page = await context.new_page()
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await _dismiss_consent(page)
+            await page.wait_for_selector("div#search, body", timeout=15000)
+
+            results = await page.evaluate(
+                r"""
+                (numResults) => {
+                    const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const results = [];
+                    const seen = new Set();
+
+                    const containers = document.querySelectorAll(
+                        'div#search div.g, div#search div.MjjYud, div#search div.WlydOe'
+                    );
+
+                    for (const el of containers) {
+                        if (results.length >= numResults) break;
+
+                        const linkEl = el.querySelector('a[href^="http"]');
+                        const titleEl = el.querySelector('h3, div[role="heading"]');
+                        if (!linkEl || !titleEl) continue;
+
+                        const url = linkEl.href;
+                        if (!url || seen.has(url)) continue;
+                        seen.add(url);
+
+                        const text = clean(el.innerText);
+                        const snippetEl = el.querySelector(
+                            'div[data-sncf], div.VwiC3b, span.aCOpRe, div[style*="-webkit-line-clamp"]'
+                        );
+                        const sourceEl = el.querySelector('cite, .UPmit, .tjvcx, .iUh30');
+                        const durationMatch = text.match(/\b\d{1,2}:\d{2}(?::\d{2})?\b/);
+                        const publishedMatch = text.match(/\b(?:\d+\s+(?:hour|day|week|month|year)s?\s+ago|Yesterday|Today|[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})\b/);
+
+                        results.push({
+                            title: clean(titleEl.innerText),
+                            url,
+                            source: sourceEl ? clean(sourceEl.innerText) : '',
+                            duration: durationMatch ? durationMatch[0] : '',
+                            published: publishedMatch ? publishedMatch[0] : '',
+                            snippet: snippetEl ? clean(snippetEl.innerText) : '',
+                        });
+                    }
+
+                    if (results.length === 0) {
+                        const allLinks = document.querySelectorAll('div#search a[href^="http"]');
+                        for (const a of allLinks) {
+                            if (results.length >= numResults) break;
+                            const h3 = a.querySelector('h3');
+                            if (!h3 || seen.has(a.href)) continue;
+                            seen.add(a.href);
+                            results.push({
+                                title: clean(h3.innerText),
+                                url: a.href,
+                                source: '',
+                                duration: '',
+                                published: '',
+                                snippet: '',
+                            });
+                        }
+                    }
+
+                    return results;
+                }
+                """,
+                num_results,
+            )
+
+            if not results:
+                return f"No video results found for: {query}"
+
+            header = f"Google Video Results for: {query}"
+            if time_range:
+                header += f" (filtered: {time_range.replace('_', ' ')})"
+            if duration:
+                header += f" (duration: {duration})"
+            if site:
+                header += f" (site: {site})"
+
+            lines = [header + "\n"]
+            for i, r in enumerate(results[:num_results], 1):
+                lines.append(f"{i}. {r['title']}")
+                lines.append(f"   URL: {r['url']}")
+                meta = []
+                if r.get("source"):
+                    meta.append(r["source"])
+                if r.get("duration"):
+                    meta.append(r["duration"])
+                if r.get("published"):
+                    meta.append(r["published"])
+                if meta:
+                    lines.append(f"   {' - '.join(meta)}")
+                if r.get("snippet"):
+                    lines.append(f"   {r['snippet']}")
+                lines.append("")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Video search failed: {e}"
+
+        finally:
+            await browser.close()
+
+
+@mcp.tool()
+async def google_videos(
+    query: str,
+    num_results: int = 5,
+    time_range: str = "",
+    duration: str = "",
+    site: str = "",
+) -> str:
+    """Search Google Videos for video results, sources, durations, and snippets.
+
+    Sample prompts that trigger this tool:
+        - "Find videos about Python asyncio"
+        - "Search recent videos about NVIDIA GPUs"
+        - "Find short videos explaining backpropagation"
+        - "Search YouTube videos about sourdough starter"
+
+    Args:
+        query: The video search query string.
+        num_results: Number of results to return (default 5, max 10).
+        time_range: Filter by time. One of: "past_hour", "past_day", "past_week", "past_month", "past_year". Leave empty for no filter.
+        duration: Filter by video length. One of: "short", "medium", "long". Leave empty for no filter.
+        site: Limit results to a specific domain (e.g. "youtube.com", "vimeo.com"). Leave empty for all sites.
+    """
+    num_results = max(1, min(num_results, 10))
+    return await _do_google_videos(
+        query,
+        num_results,
+        time_range=time_range or None,
+        duration=duration or None,
+        site=site or None,
     )
 
 
@@ -526,6 +706,502 @@ async def google_scholar(query: str, num_results: int = 5) -> str:
     """
     num_results = max(1, min(num_results, 10))
     return await _do_google_scholar(query, num_results)
+
+
+# ---------------------------------------------------------------------------
+# google_patents
+# ---------------------------------------------------------------------------
+
+async def _do_google_patents(query: str, num_results: int = 5) -> str:
+    """Search Google Patents and scrape patent result cards."""
+    encoded_query = quote_plus(query)
+    url = f"https://patents.google.com/?q={encoded_query}&oq={encoded_query}"
+
+    async with async_playwright() as pw:
+        browser, context = await _launch_browser(pw)
+        page = await context.new_page()
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await _dismiss_consent(page)
+            await page.wait_for_selector("body", timeout=15000)
+            await page.wait_for_timeout(2500)
+
+            results = await page.evaluate(
+                r"""
+                (numResults) => {
+                    const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const patentUrlFor = (el) => {
+                        const modifier = el.querySelector('state-modifier[data-result]');
+                        const dataResult = modifier ? modifier.getAttribute('data-result') : '';
+                        if (dataResult) {
+                            try { return new URL(dataResult, 'https://patents.google.com/').href; } catch(e) {}
+                        }
+                        const pdfLink = el.querySelector('a.pdfLink[href^="http"], a[href*="/patent/"]');
+                        return pdfLink ? pdfLink.href : '';
+                    };
+                    const results = [];
+                    const seen = new Set();
+
+                    const containers = document.querySelectorAll(
+                        'search-result-item, article.result, div.result, div.search-result, div[id*="result"]'
+                    );
+
+                    for (const el of containers) {
+                        if (results.length >= numResults) break;
+
+                        const titleEl = el.querySelector('h3, .result-title h3, .title');
+                        if (!titleEl) continue;
+
+                        const title = clean(titleEl.innerText || titleEl.textContent);
+                        if (!title || title.length < 3) continue;
+
+                        const url = patentUrlFor(el);
+                        const key = url || title;
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+
+                        const text = el.innerText || '';
+                        const metadataEl = el.querySelector('h4.metadata');
+                        const patentEl = metadataEl ? metadataEl.querySelector('a.pdfLink span, a.pdfLink') : null;
+                        const metadataPeople = metadataEl
+                            ? [...metadataEl.querySelectorAll('raw-html #htmlContent')]
+                                .map((node) => clean(node.innerText || node.textContent))
+                                .filter(Boolean)
+                            : [];
+                        const datesEl = el.querySelector('h4.dates, .dates');
+                        const abstractTexts = [...el.querySelectorAll('.abstract raw-html #htmlContent')]
+                            .map((node) => clean(node.innerText || node.textContent))
+                            .filter(Boolean);
+                        const patentMatch = text.match(/\b[A-Z]{2}\s?\d{4,}[A-Z]?\d?\b/);
+
+                        results.push({
+                            title,
+                            url,
+                            patent: patentEl ? clean(patentEl.innerText || patentEl.textContent) : (patentMatch ? patentMatch[0].replace(/\s+/g, '') : ''),
+                            assignee: metadataPeople[1] || '',
+                            inventor: metadataPeople[0] || '',
+                            publication: datesEl ? clean(datesEl.innerText || datesEl.textContent) : '',
+                            snippet: abstractTexts.length ? abstractTexts[abstractTexts.length - 1] : '',
+                        });
+                    }
+
+                    if (results.length === 0) {
+                        const links = document.querySelectorAll('a[href*="/patent/"]');
+                        for (const a of links) {
+                            if (results.length >= numResults) break;
+                            const title = clean(a.innerText || a.textContent);
+                            if (!title || title.length < 3 || seen.has(a.href)) continue;
+                            seen.add(a.href);
+                            const text = a.closest('article, div')?.innerText || '';
+                            const patentMatch = text.match(/\b[A-Z]{2}\s?\d{4,}[A-Z]?\d?\b/);
+                            results.push({
+                                title,
+                                url: a.href,
+                                patent: patentMatch ? patentMatch[0].replace(/\s+/g, '') : '',
+                                assignee: '',
+                                inventor: '',
+                                publication: '',
+                                snippet: '',
+                            });
+                        }
+                    }
+
+                    return results;
+                }
+                """,
+                num_results,
+            )
+
+            if not results:
+                return f"No patent results found for: {query}"
+
+            lines = [f"Google Patents Results for: {query}\n"]
+            for i, r in enumerate(results[:num_results], 1):
+                lines.append(f"{i}. {r['title']}")
+                if r.get("patent"):
+                    lines.append(f"   Patent: {r['patent']}")
+                if r.get("assignee"):
+                    lines.append(f"   Assignee: {r['assignee']}")
+                if r.get("inventor"):
+                    lines.append(f"   Inventor: {r['inventor']}")
+                if r.get("publication"):
+                    lines.append(f"   Publication: {r['publication']}")
+                if r.get("url"):
+                    lines.append(f"   URL: {r['url']}")
+                if r.get("snippet"):
+                    lines.append(f"   {r['snippet']}")
+                lines.append("")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Patent search failed: {e}"
+
+        finally:
+            await browser.close()
+
+
+@mcp.tool()
+async def google_patents(query: str, num_results: int = 5) -> str:
+    """Search Google Patents for patent documents, assignees, inventors, and abstracts.
+
+    Sample prompts that trigger this tool:
+        - "Find patents about solid state battery electrolytes"
+        - "Search Google Patents for transformer attention acceleration"
+        - "Find patents assigned to NVIDIA about GPU scheduling"
+        - "Look up patents by inventor Geoffrey Hinton"
+
+    Args:
+        query: The patent search query string. Google Patents syntax can be included directly.
+        num_results: Number of results to return (default 5, max 10).
+    """
+    num_results = max(1, min(num_results, 10))
+    return await _do_google_patents(query, num_results)
+
+
+# ---------------------------------------------------------------------------
+# google_datasets
+# ---------------------------------------------------------------------------
+
+async def _do_google_datasets(query: str, num_results: int = 5) -> str:
+    """Search Google Dataset Search and scrape dataset cards."""
+    encoded_query = quote_plus(query)
+    url = f"https://datasetsearch.research.google.com/search?query={encoded_query}"
+
+    async with async_playwright() as pw:
+        browser, context = await _launch_browser(pw)
+        page = await context.new_page()
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await _dismiss_consent(page)
+            await page.wait_for_selector("body", timeout=15000)
+            await page.wait_for_timeout(3500)
+
+            results = await page.evaluate(
+                r"""
+                (numResults) => {
+                    const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const getLines = (el) => (el.innerText || '')
+                        .split('\n').map(clean).filter(Boolean);
+                    const results = [];
+                    const seen = new Set();
+
+                    const listRoot = document.querySelector('.foClme > c-wiz');
+                    const datasetCards = listRoot ? listRoot.querySelectorAll('.xdICpb') : [];
+                    for (const el of datasetCards) {
+                        if (results.length >= numResults) break;
+                        let lines = getLines(el).filter((line) => line !== 'arrow_drop_down');
+                        if (lines[0] && lines[0].length === 1 && lines[1]) {
+                            lines = lines.slice(1);
+                        }
+                        if (lines.length < 2) continue;
+
+                        const title = lines[0];
+                        if (!title || title.length < 3 || seen.has(title)) continue;
+                        seen.add(title);
+
+                        const provider = lines.find((line, idx) =>
+                            idx > 0 && line.includes('.') && !line.startsWith('Updated')
+                        ) || '';
+                        const format = lines.find((line) =>
+                            /\b(?:csv|json|xml|parquet|zip|rdf|geojson|excel|xlsx)\b/i.test(line)
+                            && !line.includes('.')
+                        ) || '';
+                        const updated = lines.find((line) => /^Updated\b/i.test(line)) || '';
+                        const datasetUrl = el.getAttribute('data-dataset-url') || '';
+
+                        results.push({
+                            title,
+                            url: datasetUrl && datasetUrl !== 'undefined' ? datasetUrl : '',
+                            provider,
+                            license: '',
+                            format: format ? format.toUpperCase() : '',
+                            updated,
+                            snippet: lines.filter((line) =>
+                                line !== title && line !== provider && line !== format && line !== updated
+                                && !/^\+\s*more versions/i.test(line)
+                            ).slice(0, 3).join(' - '),
+                        });
+                    }
+
+                    if (results.length > 0) {
+                        return results;
+                    }
+
+                    const containers = document.querySelectorAll(
+                        '[role="listitem"], article, .dataset-card, .result, div[jscontroller]'
+                    );
+
+                    for (const el of containers) {
+                        if (results.length >= numResults) break;
+
+                        const titleEl = el.querySelector('h1, h2, h3, h4, [role="heading"], a[href^="http"]');
+                        if (!titleEl) continue;
+
+                        const title = clean(titleEl.innerText || titleEl.textContent);
+                        if (!title || title.length < 3) continue;
+                        if (/^(feedback|privacy|terms|settings)$/i.test(title)) continue;
+
+                        const linkEl = el.querySelector('a[href^="http"]');
+                        const url = linkEl ? linkEl.href : '';
+                        const key = url || title;
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+
+                        const lines = getLines(el);
+                        if (lines.length < 2 && !url) continue;
+
+                        const snippetEl = el.querySelector('p, .description, [itemprop="description"]');
+                        let provider = '';
+                        for (const line of lines) {
+                            if (line !== title && line.length < 120 && !line.startsWith('http')) {
+                                provider = line;
+                                break;
+                            }
+                        }
+
+                        const text = lines.join(' ');
+                        const licenseMatch = text.match(/\b(?:CC-BY|CC0|ODC|Open Data|Creative Commons|Public Domain)[\w\s.-]*/i);
+                        const formatMatch = text.match(/\b(?:CSV|JSON|XML|Parquet|ZIP|RDF|GeoJSON|Excel|XLSX)\b/i);
+
+                        results.push({
+                            title,
+                            url,
+                            provider,
+                            license: licenseMatch ? clean(licenseMatch[0]) : '',
+                            format: formatMatch ? formatMatch[0].toUpperCase() : '',
+                            updated: '',
+                            snippet: snippetEl ? clean(snippetEl.innerText || snippetEl.textContent) : '',
+                        });
+                    }
+
+                    if (results.length === 0) {
+                        const links = document.querySelectorAll('a[href^="http"]');
+                        for (const a of links) {
+                            if (results.length >= numResults) break;
+                            const title = clean(a.innerText || a.textContent);
+                            if (!title || title.length < 3 || seen.has(a.href)) continue;
+                            seen.add(a.href);
+                            results.push({
+                                title,
+                                url: a.href,
+                                provider: '',
+                                license: '',
+                                format: '',
+                                updated: '',
+                                snippet: '',
+                            });
+                        }
+                    }
+
+                    return results;
+                }
+                """,
+                num_results,
+            )
+
+            if not results:
+                return f"No dataset results found for: {query}"
+
+            lines = [f"Google Dataset Search Results for: {query}\n"]
+            for i, r in enumerate(results[:num_results], 1):
+                lines.append(f"{i}. {r['title']}")
+                if r.get("provider"):
+                    lines.append(f"   Provider: {r['provider']}")
+                if r.get("license"):
+                    lines.append(f"   License: {r['license']}")
+                if r.get("format"):
+                    lines.append(f"   Format: {r['format']}")
+                if r.get("updated"):
+                    lines.append(f"   {r['updated']}")
+                if r.get("url"):
+                    lines.append(f"   URL: {r['url']}")
+                if r.get("snippet"):
+                    lines.append(f"   {r['snippet']}")
+                lines.append("")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Dataset search failed: {e}"
+
+        finally:
+            await browser.close()
+
+
+@mcp.tool()
+async def google_datasets(query: str, num_results: int = 5) -> str:
+    """Search Google Dataset Search for datasets, providers, licenses, and formats.
+
+    Sample prompts that trigger this tool:
+        - "Find datasets about US housing prices"
+        - "Search for open climate datasets"
+        - "Find public datasets for traffic accidents"
+        - "Look up datasets for Korean restaurant reviews"
+
+    Args:
+        query: The dataset search query string.
+        num_results: Number of results to return (default 5, max 10).
+    """
+    num_results = max(1, min(num_results, 10))
+    return await _do_google_datasets(query, num_results)
+
+
+# ---------------------------------------------------------------------------
+# google_jobs
+# ---------------------------------------------------------------------------
+
+async def _do_google_jobs(
+    query: str,
+    location: str | None = None,
+    num_results: int = 5,
+) -> str:
+    """Search Google Jobs and scrape job cards or job-related search results."""
+    search_query = f"{query} jobs"
+    if location:
+        search_query += f" in {location}"
+
+    encoded_query = quote_plus(search_query)
+    url = f"https://www.google.com/search?q={encoded_query}&hl=en&ibp=htl;jobs"
+
+    async with async_playwright() as pw:
+        browser, context = await _launch_browser(pw)
+        page = await context.new_page()
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await _dismiss_consent(page)
+            await page.wait_for_selector("body", timeout=15000)
+            await page.wait_for_timeout(3000)
+
+            results = await page.evaluate(
+                r"""
+                (numResults) => {
+                    const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
+                    const linesFor = (el) => (el.innerText || '')
+                        .split('\n').map(clean).filter(Boolean);
+                    const results = [];
+                    const seen = new Set();
+
+                    const jobCards = document.querySelectorAll(
+                        '[role="treeitem"], [data-attrid*="job"], div[jsname="CaV2mb"]'
+                    );
+
+                    for (const el of jobCards) {
+                        if (results.length >= numResults) break;
+                        const lines = linesFor(el);
+                        if (lines.length < 2) continue;
+
+                        const titleEl = el.querySelector('[role="heading"], h3, h2');
+                        const title = clean(titleEl ? titleEl.innerText : lines[0]);
+                        if (!title || title.length < 3) continue;
+                        if (seen.has(title)) continue;
+                        seen.add(title);
+
+                        const linkEl = el.querySelector('a[href^="http"]');
+                        const text = lines.join(' ');
+                        const postedMatch = text.match(/\b(?:Today|Yesterday|\d+\s+(?:hour|day|week|month)s?\s+ago)\b/i);
+                        const remoteMatch = text.match(/\b(?:Remote|Hybrid|On-site|Onsite)\b/i);
+
+                        results.push({
+                            title,
+                            company: lines.find((line) => line !== title && line.length < 120) || '',
+                            location: lines.find((line) => /remote|hybrid|united states|[A-Z][a-z]+,\s*[A-Z]{2}|korea|seoul|tokyo|london/i.test(line)) || '',
+                            posted: postedMatch ? postedMatch[0] : '',
+                            work_mode: remoteMatch ? remoteMatch[0] : '',
+                            url: linkEl ? linkEl.href : '',
+                            snippet: lines.slice(1, 6).join(' - '),
+                        });
+                    }
+
+                    if (results.length === 0) {
+                        const containers = document.querySelectorAll('div#search div.g, div#search div.MjjYud');
+                        for (const el of containers) {
+                            if (results.length >= numResults) break;
+                            const linkEl = el.querySelector('a[href^="http"]');
+                            const titleEl = el.querySelector('h3, div[role="heading"]');
+                            if (!linkEl || !titleEl || seen.has(linkEl.href)) continue;
+                            seen.add(linkEl.href);
+                            const snippetEl = el.querySelector(
+                                'div[data-sncf], div.VwiC3b, span.aCOpRe, div[style*="-webkit-line-clamp"]'
+                            );
+                            results.push({
+                                title: clean(titleEl.innerText),
+                                company: '',
+                                location: '',
+                                posted: '',
+                                work_mode: '',
+                                url: linkEl.href,
+                                snippet: snippetEl ? clean(snippetEl.innerText) : '',
+                            });
+                        }
+                    }
+
+                    return results;
+                }
+                """,
+                num_results,
+            )
+
+            if not results:
+                return f"No job results found for: {search_query}"
+
+            header = f"Google Jobs Results for: {query}"
+            if location:
+                header += f" in {location}"
+
+            lines = [header + "\n"]
+            for i, r in enumerate(results[:num_results], 1):
+                lines.append(f"{i}. {r['title']}")
+                if r.get("company"):
+                    lines.append(f"   Company: {r['company']}")
+                if r.get("location"):
+                    lines.append(f"   Location: {r['location']}")
+                meta = []
+                if r.get("posted"):
+                    meta.append(r["posted"])
+                if r.get("work_mode"):
+                    meta.append(r["work_mode"])
+                if meta:
+                    lines.append(f"   {' - '.join(meta)}")
+                if r.get("url"):
+                    lines.append(f"   URL: {r['url']}")
+                if r.get("snippet"):
+                    lines.append(f"   {r['snippet']}")
+                lines.append("")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Job search failed: {e}"
+
+        finally:
+            await browser.close()
+
+
+@mcp.tool()
+async def google_jobs(
+    query: str,
+    location: str = "",
+    num_results: int = 5,
+) -> str:
+    """Search Google Jobs for job postings by role, skill, company, and location.
+
+    Sample prompts that trigger this tool:
+        - "Find Python developer jobs in Berlin"
+        - "Search remote machine learning engineer jobs"
+        - "Find data analyst jobs near Seoul"
+        - "Look for frontend jobs at startups in New York"
+
+    Args:
+        query: Job title, skill, company, or search phrase.
+        location: Optional city, region, or "remote" qualifier.
+        num_results: Number of results to return (default 5, max 10).
+    """
+    num_results = max(1, min(num_results, 10))
+    return await _do_google_jobs(query, location=location or None, num_results=num_results)
 
 
 # ---------------------------------------------------------------------------
