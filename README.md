@@ -783,6 +783,61 @@ playwright install chromium
 
 This puts `noapi-google-search-mcp` on your PATH so you can use it directly.
 
+> **Note:** PyPI releases can lag behind the GitHub branch. If you need the
+> latest Naver, DuckDuckGo, Reddit, and GitHub search tools from this branch,
+> use the GitHub install steps below.
+
+### Install the Naver-Enabled GitHub Branch
+
+Use this method when you want the newest tools in this repository branch before
+they are published to PyPI.
+
+1. Confirm Python 3.10 or newer:
+
+```bash
+python3 --version
+```
+
+2. Create a dedicated virtual environment:
+
+```bash
+python3 -m venv ~/.local/share/noapi-google-search-mcp
+```
+
+`~/.local/share/noapi-google-search-mcp` is only a suggested location. It keeps
+the MCP server isolated from system Python and makes the executable path stable
+for MCP clients. You can replace it with another directory such as
+`~/mcp/noapi-google-search-mcp`.
+
+3. Install this GitHub branch:
+
+```bash
+~/.local/share/noapi-google-search-mcp/bin/pip install --upgrade pip
+~/.local/share/noapi-google-search-mcp/bin/pip install \
+  "git+https://github.com/hyunmin625/noapi-google-search-mcp.git@codex/google-vertical-search-tools"
+```
+
+4. Install the Playwright Chromium browser used by the search tools:
+
+```bash
+~/.local/share/noapi-google-search-mcp/bin/playwright install chromium
+```
+
+5. Verify that the MCP server starts:
+
+```bash
+~/.local/share/noapi-google-search-mcp/bin/noapi-google-search-mcp
+```
+
+The command should stay running and wait for MCP stdio input. Press `Ctrl+C` to
+stop it after this check.
+
+6. Optional: verify that the new Naver tool can be imported locally:
+
+```bash
+~/.local/share/noapi-google-search-mcp/bin/python -c 'import asyncio; from google_search_mcp.server import naver_news; print(asyncio.run(naver_news("반도체 수출", num_results=1)))'
+```
+
 ### Install in a Virtual Environment
 
 If you don't have pipx, install in a dedicated venv:
@@ -829,6 +884,23 @@ Add to `~/.lmstudio/mcp.json`:
 }
 ```
 
+For the GitHub branch install above, use the venv executable path:
+
+```json
+{
+  "mcpServers": {
+    "google-search": {
+      "command": "/home/user/.local/share/noapi-google-search-mcp/bin/noapi-google-search-mcp",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+Replace `/home/user` with your actual home directory if it differs.
+
 ### Claude Desktop
 
 Add to your Claude Desktop config (`claude_desktop_config.json`):
@@ -844,6 +916,56 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 ```
 
 > If installed in a venv, use the full path to the binary instead.
+
+For the GitHub branch install above:
+
+```json
+{
+  "mcpServers": {
+    "google-search": {
+      "command": "/home/user/.local/share/noapi-google-search-mcp/bin/noapi-google-search-mcp",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+### OpenClaw
+
+OpenClaw stores outbound MCP server definitions with
+`openclaw mcp set <name> <json>`. This writes the definition into OpenClaw's
+MCP client-side registry; it does not prove the target server is reachable at
+registration time. Test the executable first with the command shown in the
+installation section.
+
+Register the GitHub branch install:
+
+```bash
+openclaw mcp set google-search '{
+  "command": "/home/user/.local/share/noapi-google-search-mcp/bin/noapi-google-search-mcp",
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
+}'
+```
+
+Check the saved definition:
+
+```bash
+openclaw mcp list
+openclaw mcp show google-search --json
+```
+
+Remove it if needed:
+
+```bash
+openclaw mcp unset google-search
+```
+
+OpenClaw MCP registry reference:
+https://docs.openclaw.ai/cli/mcp
 
 ### As a CLI
 
@@ -864,6 +986,39 @@ git clone https://github.com/VincentKaufmann/noapi-google-search-mcp.git
 cd google-search-mcp
 pip install -e .
 playwright install chromium
+```
+
+## Test Prompts for Naver Search
+
+After registering the MCP server and restarting your MCP client, try:
+
+```text
+네이버 뉴스에서 반도체 수출 기사 3개 찾아줘
+```
+
+```text
+지식iN에서 맥북 파이썬 설치 오류 찾아줘
+```
+
+```text
+네이버 블로그에서 파이썬 설치 방법 찾아줘
+```
+
+```text
+네이버 카페에서 전세 대출 후기 검색해줘
+```
+
+Available Naver tools:
+
+```text
+naver_search
+naver_news
+naver_blog
+naver_cafe
+naver_kin
+naver_shopping
+naver_images
+naver_videos
 ```
 
 ## License
