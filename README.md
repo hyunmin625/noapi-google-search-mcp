@@ -34,6 +34,10 @@ Works with LM Studio, Claude Desktop, and any MCP-compatible client.
 | Google Patents | Built-in | Not available |
 | Google Dataset Search | Built-in | Not available |
 | Google Jobs | Built-in | Not available |
+| DuckDuckGo Search | Built-in | Usually separate |
+| Naver Search | Built-in (web, news, blog, cafe, Knowledge iN, shopping, images, videos) | Usually separate |
+| Reddit Search | Built-in | Usually separate |
+| GitHub Search | Built-in (public no-key search) | Usually separate |
 | Google Books | Built-in | Not available |
 | Google Images | Built-in (inline in chat) | Separate API needed |
 | Google Lens | Built-in (reverse image search) | Not available |
@@ -268,6 +272,85 @@ Search Google Jobs for job postings by role, skill, company, and location.
 | `num_results` | Number of results (1-10, default 5) | `5` |
 
 Returns: title, company, location, posted date/work mode when detected, URL, and snippet.
+
+---
+
+### `duckduckgo_search` - DuckDuckGo Search
+
+Search DuckDuckGo web results through its no-JS HTML result page.
+
+**Parameters:**
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `query` | Search query (required) | `"privacy preserving analytics"` |
+| `num_results` | Number of results (1-10, default 5) | `5` |
+| `region` | Optional DuckDuckGo region code | `"us-en"`, `"kr-ko"`, `"jp-jp"` |
+| `time_range` | Optional recency filter | `"past_day"`, `"past_week"`, `"past_month"`, `"past_year"` |
+
+Returns: title, URL, source, and snippet. If DuckDuckGo blocks the network session, the tool returns a clear blocked/unavailable message instead of failing silently.
+
+---
+
+### `naver_search` and Naver Vertical Tools
+
+Search Naver without a Naver API key using rendered search pages. Korean verticals are exposed as separate tools so the LLM can pick the right surface directly.
+
+**Tools:**
+| Tool | Description |
+|------|-------------|
+| `naver_search` | Naver unified search |
+| `naver_news` | Naver News articles |
+| `naver_blog` | Naver Blog posts |
+| `naver_cafe` | Naver Cafe community posts |
+| `naver_kin` | Naver Knowledge iN Q&A |
+| `naver_shopping` | Naver Shopping products when the session is allowed |
+| `naver_images` | Naver Images with thumbnails when available |
+| `naver_videos` | Naver Videos from YouTube, Naver TV, and other sources |
+
+**Common Parameters:**
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `query` | Search query (required) | `"파이썬"`, `"서울 AI 스타트업"` |
+| `num_results` | Number of results (1-10, default 5) | `5` |
+| `sort` | Optional sort where supported | `"relevance"`, `"latest"` |
+| `time_range` | Optional recency filter where supported | `"past_hour"`, `"past_day"`, `"past_week"`, `"past_month"`, `"past_year"` |
+
+Returns: title, URL, source/date when detected, snippet, and thumbnail when available. Naver Shopping can temporarily restrict automated browser sessions; the tool reports that condition clearly.
+
+---
+
+### `reddit_search` - Reddit Search
+
+Search Reddit posts, comments, communities, media, or people through Reddit's rendered web search.
+
+**Parameters:**
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `query` | Search query (required) | `"python asyncio"` |
+| `num_results` | Number of results (1-10, default 5) | `5` |
+| `subreddit` | Optional subreddit restriction | `"Python"` |
+| `result_type` | Search surface | `"posts"`, `"comments"`, `"communities"`, `"media"`, `"people"` |
+| `sort` | Sort order | `"relevance"`, `"hot"`, `"top"`, `"new"`, `"comments"` |
+| `time_range` | Time filter | `"hour"`, `"day"`, `"week"`, `"month"`, `"year"`, `"all"` |
+
+Returns: title, URL, subreddit/user when detected, score/comment metadata, and snippet.
+
+---
+
+### `github_search` - GitHub Search
+
+Search GitHub public repositories and users through GitHub's no-key public search endpoint. Issues, pull requests, and discussions are attempted where GitHub exposes them to unauthenticated sessions; if GitHub requires sign-in for that vertical, the tool reports that clearly.
+
+**Parameters:**
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `query` | GitHub search query with optional qualifiers | `"fastapi stars:>1000"` |
+| `search_type` | Search surface | `"repositories"`, `"issues"`, `"pullrequests"`, `"users"`, `"discussions"` |
+| `num_results` | Number of results (1-10, default 5) | `5` |
+| `sort` | Optional GitHub sort field | `"stars"`, `"forks"`, `"updated"`, `"comments"` |
+| `order` | Sort order when `sort` is set | `"desc"`, `"asc"` |
+
+Returns: repository/user/issue title, URL, language or repository metadata, stars/forks/comments when available, and snippet.
 
 ---
 
@@ -582,6 +665,39 @@ Here are example prompts you can type into LM Studio or Claude Desktop, and whic
 | *"Find Python developer jobs in Berlin"* | `google_jobs` |
 | *"Search remote machine learning engineer jobs"* | `google_jobs` |
 | *"Find data analyst jobs near Seoul"* | `google_jobs` |
+
+### DuckDuckGo
+| What you type | Tool called |
+|--------------|-------------|
+| *"Search DuckDuckGo for privacy preserving analytics"* | `duckduckgo_search` |
+| *"Find DuckDuckGo results for Python asyncio"* | `duckduckgo_search` |
+| *"Search DuckDuckGo Korea for AI policy news from the past week"* | `duckduckgo_search` |
+
+### Naver
+| What you type | Tool called |
+|--------------|-------------|
+| *"네이버에서 파이썬 최신 글 검색해줘"* | `naver_search` |
+| *"네이버 뉴스에서 반도체 수출 기사 찾아줘"* | `naver_news` |
+| *"네이버 블로그에서 제주도 여행 후기 찾아줘"* | `naver_blog` |
+| *"네이버 카페에서 전세 대출 후기 검색해줘"* | `naver_cafe` |
+| *"지식iN에서 맥북 파이썬 설치 오류 찾아줘"* | `naver_kin` |
+| *"네이버 쇼핑에서 노트북 검색해줘"* | `naver_shopping` |
+| *"네이버 이미지에서 한옥 인테리어 찾아줘"* | `naver_images` |
+| *"네이버 동영상에서 파이썬 강의 찾아줘"* | `naver_videos` |
+
+### Reddit
+| What you type | Tool called |
+|--------------|-------------|
+| *"Search Reddit for LangChain complaints this month"* | `reddit_search` |
+| *"Find top posts in r/Python about asyncio"* | `reddit_search` |
+| *"Search Reddit communities for local LLM"* | `reddit_search` |
+
+### GitHub
+| What you type | Tool called |
+|--------------|-------------|
+| *"Search GitHub repositories for MCP browser automation"* | `github_search` |
+| *"Find GitHub issues about Playwright timeout"* | `github_search` |
+| *"Search GitHub pull requests for FastMCP"* | `github_search` |
 
 ### Books
 | What you type | Tool called |

@@ -12,6 +12,17 @@ Tools provided:
     - google_patents: Search Google Patents for patent documents
     - google_datasets: Search Google Dataset Search for datasets
     - google_jobs: Search Google Jobs for job postings
+    - duckduckgo_search: Search DuckDuckGo web results
+    - naver_search: Search Naver unified results
+    - naver_news: Search Naver News
+    - naver_blog: Search Naver Blog
+    - naver_cafe: Search Naver Cafe posts
+    - naver_kin: Search Naver Knowledge iN Q&A
+    - naver_shopping: Search Naver Shopping
+    - naver_images: Search Naver Images
+    - naver_videos: Search Naver Videos
+    - reddit_search: Search Reddit posts, comments, communities, and people
+    - github_search: Search GitHub repositories, issues, pull requests, users, and discussions
     - google_images: Search Google Images for image URLs
     - google_trends: Check Google Trends for topic interest over time
     - google_maps: Search Google Maps for places, restaurants, businesses
@@ -40,7 +51,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus, urlencode
 
 from mcp.server.fastmcp import Context, FastMCP, Image
 from playwright.async_api import async_playwright
@@ -65,6 +76,118 @@ VIDEO_DURATION_MAP = {
     "short": "dur:s",
     "medium": "dur:m",
     "long": "dur:l",
+}
+
+DDG_TIME_RANGE_MAP = {
+    "past_day": "d",
+    "past_week": "w",
+    "past_month": "m",
+    "past_year": "y",
+}
+
+NAVER_TIME_RANGE_MAP = {
+    "past_hour": "p:1h",
+    "past_day": "p:1d",
+    "past_week": "p:1w",
+    "past_month": "p:1m",
+    "past_year": "p:1y",
+}
+
+NAVER_SORT_MAP = {
+    "relevance": "so:r",
+    "latest": "so:dd",
+    "date": "so:dd",
+}
+
+NAVER_VERTICALS = {
+    "web": {
+        "label": "Naver Search",
+        "url": "https://search.naver.com/search.naver",
+        "params": {"ssc": "tab.nx.all", "where": "nexearch", "sm": "tab_jum"},
+    },
+    "news": {
+        "label": "Naver News",
+        "url": "https://search.naver.com/search.naver",
+        "params": {"ssc": "tab.news.all", "where": "news", "sm": "tab_jum"},
+    },
+    "blog": {
+        "label": "Naver Blog",
+        "url": "https://search.naver.com/search.naver",
+        "params": {"ssc": "tab.blog.all", "sm": "tab_jum"},
+    },
+    "cafe": {
+        "label": "Naver Cafe",
+        "url": "https://search.naver.com/search.naver",
+        "params": {"ssc": "tab.cafe.all", "sm": "tab_jum"},
+    },
+    "kin": {
+        "label": "Naver Knowledge iN",
+        "url": "https://search.naver.com/search.naver",
+        "params": {"ssc": "tab.kin.kqna", "where": "kin", "sm": "tab_jum"},
+    },
+    "shopping": {
+        "label": "Naver Shopping",
+        "url": "https://search.shopping.naver.com/search/all",
+        "params": {"where": "all", "frm": "NVSCTAB"},
+    },
+    "image": {
+        "label": "Naver Images",
+        "url": "https://search.naver.com/search.naver",
+        "params": {"ssc": "tab.image.all", "where": "image", "sm": "tab_jum"},
+    },
+    "video": {
+        "label": "Naver Videos",
+        "url": "https://search.naver.com/search.naver",
+        "params": {"ssc": "tab.video.all", "where": "video", "sm": "tab_jum"},
+    },
+}
+
+REDDIT_SORT_MAP = {
+    "relevance": "relevance",
+    "hot": "hot",
+    "top": "top",
+    "new": "new",
+    "comments": "comments",
+}
+
+REDDIT_TIME_RANGE_MAP = {
+    "hour": "hour",
+    "day": "day",
+    "week": "week",
+    "month": "month",
+    "year": "year",
+    "all": "all",
+}
+
+REDDIT_TYPE_MAP = {
+    "posts": "posts",
+    "post": "posts",
+    "links": "posts",
+    "link": "posts",
+    "comments": "comments",
+    "communities": "communities",
+    "subreddits": "communities",
+    "media": "media",
+    "people": "people",
+    "users": "people",
+}
+
+GITHUB_SEARCH_TYPE_MAP = {
+    "repositories": "repositories",
+    "repository": "repositories",
+    "repos": "repositories",
+    "repo": "repositories",
+    "issues": "issues",
+    "issue": "issues",
+    "pullrequests": "pullrequests",
+    "pullrequest": "pullrequests",
+    "pull_requests": "pullrequests",
+    "prs": "pullrequests",
+    "pr": "pullrequests",
+    "users": "users",
+    "user": "users",
+    "discussions": "discussions",
+    "discussion": "discussions",
 }
 
 
@@ -1202,6 +1325,954 @@ async def google_jobs(
     """
     num_results = max(1, min(num_results, 10))
     return await _do_google_jobs(query, location=location or None, num_results=num_results)
+
+
+# ---------------------------------------------------------------------------
+# Non-Google no-key search tools
+# ---------------------------------------------------------------------------
+
+def _squash_text(value: str | None, max_len: int | None = None) -> str:
+    """Normalize whitespace and optionally trim long scraped text."""
+    text = re.sub(r"\s+", " ", value or "").strip()
+    if max_len and len(text) > max_len:
+        return text[: max_len - 1].rstrip() + "..."
+    return text
+
+
+def _format_search_results(
+    header: str,
+    results: list[dict],
+    num_results: int,
+    no_results_message: str,
+) -> str:
+    """Format common title/url/snippet search result dictionaries."""
+    if not results:
+        return no_results_message
+
+    lines = [header + "\n"]
+    for i, r in enumerate(results[:num_results], 1):
+        title = _squash_text(r.get("title") or "Untitled", 220)
+        lines.append(f"{i}. {title}")
+
+        meta = []
+        for key in ("source", "date", "score", "comments", "language", "stars", "forks", "license"):
+            value = _squash_text(str(r.get(key) or ""), 100)
+            if value:
+                meta.append(value)
+        if meta:
+            lines.append(f"   {' - '.join(meta)}")
+
+        if r.get("url"):
+            lines.append(f"   URL: {r['url']}")
+        if r.get("thumbnail"):
+            lines.append(f"   Thumbnail: {r['thumbnail']}")
+        if r.get("snippet"):
+            lines.append(f"   {_squash_text(r['snippet'], 500)}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+async def _do_duckduckgo_search(
+    query: str,
+    num_results: int = 5,
+    region: str | None = None,
+    time_range: str | None = None,
+) -> str:
+    """Search DuckDuckGo's no-JS HTML endpoint and scrape result rows."""
+    params = {"q": query}
+    if region:
+        params["kl"] = region
+    if time_range and time_range in DDG_TIME_RANGE_MAP:
+        params["df"] = DDG_TIME_RANGE_MAP[time_range]
+    url = f"https://html.duckduckgo.com/html/?{urlencode(params)}"
+
+    async with async_playwright() as pw:
+        browser, context = await _launch_browser(pw)
+        page = await context.new_page()
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(1200)
+
+            body_text = await page.evaluate("() => document.body?.innerText || ''")
+            if "If this persists" in body_text or "anonymized error code" in body_text:
+                return (
+                    "DuckDuckGo search is currently blocked or unavailable from this "
+                    "network. Try again later or use another search tool."
+                )
+
+            results = await page.evaluate(
+                """
+                (numResults) => {
+                    const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                    const unwrapUrl = (href) => {
+                        try {
+                            const u = new URL(href, location.href);
+                            const uddg = u.searchParams.get('uddg');
+                            return uddg ? decodeURIComponent(uddg) : u.href;
+                        } catch(e) {
+                            return href || '';
+                        }
+                    };
+                    const rows = [];
+                    const seen = new Set();
+                    const containers = [
+                        ...document.querySelectorAll('.result, .web-result, tr, div')
+                    ];
+
+                    for (const el of containers) {
+                        if (rows.length >= numResults) break;
+                        const linkEl = el.querySelector(
+                            'a.result__a, a.result-link, a[href*="uddg="], a[href^="http"]'
+                        );
+                        if (!linkEl) continue;
+                        const title = clean(linkEl.innerText || linkEl.textContent);
+                        const href = unwrapUrl(linkEl.getAttribute('href') || linkEl.href);
+                        if (!title || title.length < 3 || !href || seen.has(href)) continue;
+                        if (/duckduckgo\\.com\\/y\\.js/i.test(href)) continue;
+                        seen.add(href);
+
+                        const snippetEl = el.querySelector(
+                            '.result__snippet, .result-snippet, .snippet, td.result-snippet'
+                        );
+                        const sourceEl = el.querySelector(
+                            '.result__url, .result__extras__url, .result-url'
+                        );
+                        rows.push({
+                            title,
+                            url: href,
+                            source: sourceEl ? clean(sourceEl.innerText) : '',
+                            snippet: snippetEl ? clean(snippetEl.innerText) : '',
+                        });
+                    }
+                    return rows;
+                }
+                """,
+                num_results,
+            )
+
+            header = f"DuckDuckGo Search Results for: {query}"
+            if region:
+                header += f" (region: {region})"
+            if time_range:
+                header += f" (filtered: {time_range.replace('_', ' ')})"
+
+            return _format_search_results(
+                header,
+                results,
+                num_results,
+                f"No DuckDuckGo results found for: {query}",
+            )
+
+        except Exception as e:
+            return f"DuckDuckGo search failed: {e}"
+
+        finally:
+            await browser.close()
+
+
+@mcp.tool()
+async def duckduckgo_search(
+    query: str,
+    num_results: int = 5,
+    region: str = "",
+    time_range: str = "",
+) -> str:
+    """Search DuckDuckGo web results without an API key.
+
+    Sample prompts that trigger this tool:
+        - "Search DuckDuckGo for privacy preserving analytics"
+        - "Find DuckDuckGo results for Python asyncio"
+        - "Search DuckDuckGo Korea for AI policy news from the past week"
+
+    Args:
+        query: Search query string.
+        num_results: Number of results to return (default 5, max 10).
+        region: Optional DuckDuckGo region code such as "us-en", "kr-ko", "jp-jp".
+        time_range: Optional recency filter: "past_day", "past_week", "past_month", "past_year".
+    """
+    num_results = max(1, min(num_results, 10))
+    return await _do_duckduckgo_search(
+        query,
+        num_results=num_results,
+        region=region or None,
+        time_range=time_range or None,
+    )
+
+
+def _build_naver_url(
+    query: str,
+    vertical: str,
+    sort: str | None = None,
+    time_range: str | None = None,
+) -> tuple[str, str]:
+    """Build a Naver search URL for a vertical and return it with its label."""
+    spec = NAVER_VERTICALS.get(vertical, NAVER_VERTICALS["web"])
+    params = dict(spec["params"])
+    params["query"] = query
+
+    nso_parts = []
+    if sort and sort in NAVER_SORT_MAP:
+        nso_parts.append(NAVER_SORT_MAP[sort])
+    if time_range and time_range in NAVER_TIME_RANGE_MAP:
+        nso_parts.append(NAVER_TIME_RANGE_MAP[time_range])
+    if nso_parts and vertical != "shopping":
+        params["nso"] = ",".join(nso_parts)
+
+    return f"{spec['url']}?{urlencode(params)}", spec["label"]
+
+
+def _naver_text_fallback(body_text: str, num_results: int) -> list[dict]:
+    """Fallback parser for Naver pages that expose text but no stable anchors."""
+    skip_exact = {
+        "관련도순", "최신순", "옵션", "전체", "이미지", "블로그", "카페", "클립",
+        "지식iN", "쇼핑", "뉴스", "동영상", "더보기", "문서 저장하기", "다음",
+    }
+    skip_re = re.compile(
+        r"^(\d{1,2}:\d{2}(:\d{2})?|\d+|RE|AI 브리핑|실험 단계|검색 결과|"
+        r"\d{4}\.\d{2}\.\d{2}\.?|\d+\s*(일|시간|주|개월|년)\s*전)$"
+    )
+    lines = [
+        line.strip()
+        for line in body_text.splitlines()
+        if line.strip() and line.strip() not in skip_exact and not skip_re.match(line.strip())
+    ]
+
+    results = []
+    i = 0
+    while i < len(lines) and len(results) < num_results:
+        title = lines[i]
+        if len(title) < 6 or len(title) > 180:
+            i += 1
+            continue
+        source = ""
+        snippet = ""
+        if i + 1 < len(lines) and len(lines[i + 1]) < 80:
+            source = lines[i + 1]
+        for candidate in lines[i + 1 : i + 5]:
+            if candidate != source and len(candidate) > 30:
+                snippet = candidate
+                break
+        results.append({"title": title, "source": source, "snippet": snippet, "url": ""})
+        i += 3
+
+    return results
+
+
+async def _do_naver_search(
+    query: str,
+    num_results: int = 5,
+    vertical: str = "web",
+    sort: str | None = None,
+    time_range: str | None = None,
+) -> str:
+    """Search Naver verticals using the rendered search page."""
+    url, label = _build_naver_url(query, vertical, sort=sort, time_range=time_range)
+
+    async with async_playwright() as pw:
+        browser, context = await _launch_browser(pw)
+        page = await context.new_page()
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2500)
+
+            body_text = await page.evaluate("() => document.body?.innerText || ''")
+            if "쇼핑 서비스 접속이 일시적으로 제한되었습니다" in body_text:
+                return (
+                    "Naver Shopping temporarily restricted access from this browser "
+                    "session. Try again later or use a different network/session."
+                )
+            if "비정상적인 접근" in body_text or "자동입력 방지" in body_text:
+                return (
+                    "Naver blocked this automated search session. Try again later "
+                    "or reduce request frequency."
+                )
+
+            results = await page.evaluate(
+                """
+                ({numResults, vertical}) => {
+                    const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                    const badHref = /javascript:|#|help\\.naver|nid\\.naver|keep\\.naver|adcr|ader\\.naver/i;
+                    const searchHref = /search\\.naver\\.com\\/search\\.naver/i;
+                    const navTexts = new Set([
+                        '관련도순', '최신순', '오래된순', '옵션', '전체', '이미지', '블로그',
+                        '카페', '클립', '지식iN', '쇼핑', '뉴스', '동영상', '더보기',
+                        '옵션 초기화', '문서 저장하기', 'Keep에 바로가기', '다음',
+                        '모바일 메인 언론사', 'PC 메인 언론사'
+                    ]);
+                    const weakText = (text) => {
+                        if (!text || text.length < 3 || navTexts.has(text)) return true;
+                        if (/^\\d{1,2}:\\d{2}(:\\d{2})?$/.test(text)) return true;
+                        if (/^\\d+$/.test(text)) return true;
+                        if (/^RE/.test(text)) return true;
+                        if (/^\\d{4}\\.\\d{2}\\.\\d{2}\\.?$/.test(text)) return true;
+                        if (/^\\d+\\s*(일|시간|주|개월|년)\\s*전$/.test(text)) return true;
+                        if (/^(네이버뉴스|YouTube|네이버 블로그|네이버 카페)$/.test(text)) return true;
+                        return false;
+                    };
+                    const normalizeHref = (href) => {
+                        try {
+                            const u = new URL(href, location.href);
+                            u.hash = '';
+                            return u.href;
+                        } catch(e) {
+                            return href || '';
+                        }
+                    };
+                    const canonicalKey = (href) => {
+                        try {
+                            const u = new URL(href, location.href);
+                            if (vertical === 'kin' && u.searchParams.get('docId')) {
+                                return 'kin:' + u.searchParams.get('docId');
+                            }
+                            if (/youtube\\.com$/.test(u.hostname) && u.searchParams.get('v')) {
+                                return 'youtube:' + u.searchParams.get('v');
+                            }
+                        } catch(e) {}
+                        return normalizeHref(href);
+                    };
+                    const isArticleUrl = (href) => {
+                        try {
+                            const u = new URL(href, location.href);
+                            const pathParts = u.pathname.split('/').filter(Boolean);
+                            if (vertical === 'blog' && /(^|\\.)blog\\.naver\\.com$/.test(u.hostname)) {
+                                return pathParts.length >= 2;
+                            }
+                            if (vertical === 'blog') {
+                                return /(^|\\.)blog\\.naver\\.com$/.test(u.hostname) ||
+                                    /(^|\\.)contents\\.premium\\.naver\\.com$/.test(u.hostname);
+                            }
+                            if (vertical === 'cafe' && /(^|\\.)cafe\\.naver\\.com$/.test(u.hostname)) {
+                                return pathParts.length >= 2 && /\\d/.test(pathParts[1]);
+                            }
+                            if (vertical === 'kin') {
+                                return /kin\\.naver\\.com/.test(u.hostname) && /detail\\.naver/.test(u.pathname);
+                            }
+                            if (vertical === 'news') {
+                                if (/media\\.naver\\.com$/.test(u.hostname)) return false;
+                                if (/news\\.naver\\.com$/.test(u.hostname) && /\\/main\\/static\\//.test(u.pathname)) return false;
+                                if (/n\\.news\\.naver\\.com$/.test(u.hostname)) return /\\/article\\//.test(u.pathname);
+                                return pathParts.length >= 2;
+                            }
+                            if (vertical === 'video') {
+                                if (/youtube\\.com$/.test(u.hostname)) return /\\/watch$|\\/shorts\\//.test(u.pathname);
+                                if (/youtu\\.be$/.test(u.hostname)) return pathParts.length >= 1;
+                                return pathParts.length >= 2;
+                            }
+                        } catch(e) {}
+                        return true;
+                    };
+                    const pickTitle = (lines, text) => {
+                        for (const line of lines) {
+                            const value = clean(line);
+                            if (!weakText(value) && value.length <= 180) return value;
+                        }
+                        if (!weakText(text) && text.length <= 180) return text;
+                        return '';
+                    };
+                    const pickSnippet = (lines, title, text) => {
+                        const choices = [...lines, text].map(clean);
+                        for (const value of choices) {
+                            if (!value || value === title || weakText(value)) continue;
+                            if (value.length > 25 && value.length <= 500) return value;
+                        }
+                        return '';
+                    };
+                    const pickSource = (lines, title) => {
+                        for (const line of lines) {
+                            const value = clean(line);
+                            if (!value || value === title || weakText(value)) continue;
+                            if (value.length <= 70) return value;
+                        }
+                        return '';
+                    };
+                    const pickDate = (lines) => {
+                        for (const line of lines) {
+                            const value = clean(line);
+                            if (/^\\d{4}\\.\\d{2}\\.\\d{2}\\.?$/.test(value)) return value;
+                            if (/^\\d+\\s*(일|시간|주|개월|년)\\s*전$/.test(value)) return value;
+                        }
+                        return '';
+                    };
+
+                    const content = document.querySelector('#content') || document.body;
+                    const grouped = new Map();
+                    const anchors = [...content.querySelectorAll('a[href]')];
+
+                    for (const a of anchors) {
+                        const hrefRaw = a.getAttribute('href') || a.href || '';
+                        const href = normalizeHref(hrefRaw);
+                        const text = clean(a.innerText || a.getAttribute('title') || a.getAttribute('aria-label'));
+                        if (!href || !text || badHref.test(href) || searchHref.test(href)) continue;
+                        if (!isArticleUrl(href)) continue;
+
+                        const parent = a.closest('li, article, section, div') || a.parentElement;
+                        const lines = (parent?.innerText || text)
+                            .split(/\\n+/)
+                            .map(clean)
+                            .filter(Boolean)
+                            .slice(0, 14);
+                        const title = pickTitle(lines, text);
+                        const snippetCandidate = text.length > 25 && text.length <= 600 ? text : '';
+                        if (!title && !snippetCandidate) continue;
+
+                        const key = canonicalKey(href);
+                        const item = grouped.get(key) || {
+                            title: '',
+                            url: href,
+                            source: '',
+                            date: '',
+                            snippet: '',
+                            thumbnail: '',
+                        };
+
+                        if (title && (!item.title || weakText(item.title) || (vertical === 'video' && !weakText(title)))) {
+                            item.title = title;
+                        }
+                        if (!item.url || (item.url.includes('#') && !href.includes('#'))) {
+                            item.url = href;
+                        }
+                        item.source = item.source || pickSource(lines, item.title);
+                        item.date = item.date || pickDate(lines);
+                        if (!item.snippet) {
+                            const fallbackSnippet = snippetCandidate !== item.title ? snippetCandidate : '';
+                            item.snippet = pickSnippet(lines, item.title, text) || fallbackSnippet;
+                        }
+
+                        const img = a.querySelector('img[src], img[data-src]') ||
+                            parent?.querySelector('img[src], img[data-src]');
+                        const thumb = img?.getAttribute('src') || img?.getAttribute('data-src') || '';
+                        if (thumb && !thumb.startsWith('data:')) {
+                            item.thumbnail = item.thumbnail || thumb;
+                        }
+
+                        grouped.set(key, item);
+                    }
+
+                    const results = [...grouped.values()]
+                        .filter((r) => r.title && r.url)
+                        .filter((r) => {
+                            if (vertical === 'video') {
+                                return !/^\\d{1,2}:\\d{2}(:\\d{2})?$/.test(r.title);
+                            }
+                            return true;
+                        })
+                        .slice(0, numResults);
+                    return results;
+                }
+                """,
+                {"numResults": num_results, "vertical": vertical},
+            )
+
+            if not results:
+                results = _naver_text_fallback(body_text, num_results)
+
+            header = f"{label} Results for: {query}"
+            if sort:
+                header += f" (sort: {sort})"
+            if time_range:
+                header += f" (filtered: {time_range.replace('_', ' ')})"
+
+            return _format_search_results(
+                header,
+                results,
+                num_results,
+                f"No {label} results found for: {query}",
+            )
+
+        except Exception as e:
+            return f"{label} search failed: {e}"
+
+        finally:
+            await browser.close()
+
+
+@mcp.tool()
+async def naver_search(
+    query: str,
+    num_results: int = 5,
+    sort: str = "relevance",
+    time_range: str = "",
+) -> str:
+    """Search Naver unified results in Korean and global web content.
+
+    Sample prompts that trigger this tool:
+        - "네이버에서 파이썬 최신 글 검색해줘"
+        - "Search Naver for Seoul AI startup news"
+        - "네이버 통합검색으로 부산 맛집 찾아줘"
+
+    Args:
+        query: Search query string.
+        num_results: Number of results to return (default 5, max 10).
+        sort: "relevance" or "latest".
+        time_range: Optional recency filter: "past_hour", "past_day", "past_week", "past_month", "past_year".
+    """
+    num_results = max(1, min(num_results, 10))
+    return await _do_naver_search(
+        query,
+        num_results=num_results,
+        vertical="web",
+        sort=sort or None,
+        time_range=time_range or None,
+    )
+
+
+@mcp.tool()
+async def naver_news(
+    query: str,
+    num_results: int = 5,
+    sort: str = "relevance",
+    time_range: str = "",
+) -> str:
+    """Search Naver News for Korean headlines and publishers."""
+    num_results = max(1, min(num_results, 10))
+    return await _do_naver_search(
+        query,
+        num_results=num_results,
+        vertical="news",
+        sort=sort or None,
+        time_range=time_range or None,
+    )
+
+
+@mcp.tool()
+async def naver_blog(
+    query: str,
+    num_results: int = 5,
+    sort: str = "relevance",
+    time_range: str = "",
+) -> str:
+    """Search Naver Blog posts with title, URL, date/source, and snippet."""
+    num_results = max(1, min(num_results, 10))
+    return await _do_naver_search(
+        query,
+        num_results=num_results,
+        vertical="blog",
+        sort=sort or None,
+        time_range=time_range or None,
+    )
+
+
+@mcp.tool()
+async def naver_cafe(
+    query: str,
+    num_results: int = 5,
+    sort: str = "relevance",
+    time_range: str = "",
+) -> str:
+    """Search Naver Cafe community posts."""
+    num_results = max(1, min(num_results, 10))
+    return await _do_naver_search(
+        query,
+        num_results=num_results,
+        vertical="cafe",
+        sort=sort or None,
+        time_range=time_range or None,
+    )
+
+
+@mcp.tool()
+async def naver_kin(
+    query: str,
+    num_results: int = 5,
+    sort: str = "relevance",
+    time_range: str = "",
+) -> str:
+    """Search Naver Knowledge iN Q&A results."""
+    num_results = max(1, min(num_results, 10))
+    return await _do_naver_search(
+        query,
+        num_results=num_results,
+        vertical="kin",
+        sort=sort or None,
+        time_range=time_range or None,
+    )
+
+
+@mcp.tool()
+async def naver_shopping(query: str, num_results: int = 5) -> str:
+    """Search Naver Shopping product listings when the page allows automated access."""
+    num_results = max(1, min(num_results, 10))
+    return await _do_naver_search(query, num_results=num_results, vertical="shopping")
+
+
+@mcp.tool()
+async def naver_images(query: str, num_results: int = 5) -> str:
+    """Search Naver Images and return linked image-result pages with thumbnails when available."""
+    num_results = max(1, min(num_results, 10))
+    return await _do_naver_search(query, num_results=num_results, vertical="image")
+
+
+@mcp.tool()
+async def naver_videos(
+    query: str,
+    num_results: int = 5,
+    sort: str = "relevance",
+    time_range: str = "",
+) -> str:
+    """Search Naver Videos for YouTube, Naver TV, and other video results."""
+    num_results = max(1, min(num_results, 10))
+    return await _do_naver_search(
+        query,
+        num_results=num_results,
+        vertical="video",
+        sort=sort or None,
+        time_range=time_range or None,
+    )
+
+
+async def _do_reddit_search(
+    query: str,
+    num_results: int = 5,
+    subreddit: str | None = None,
+    result_type: str = "posts",
+    sort: str = "relevance",
+    time_range: str = "all",
+) -> str:
+    """Search Reddit's rendered web search pages."""
+    normalized_type = REDDIT_TYPE_MAP.get(result_type, "posts")
+    normalized_sort = REDDIT_SORT_MAP.get(sort, "relevance")
+    normalized_time = REDDIT_TIME_RANGE_MAP.get(time_range, "all")
+
+    if subreddit:
+        safe_subreddit = quote(subreddit.strip().strip("/"))
+        base_url = f"https://www.reddit.com/r/{safe_subreddit}/search/"
+        params = {"q": query, "restrict_sr": "1", "type": normalized_type}
+    else:
+        base_url = "https://www.reddit.com/search/"
+        params = {"q": query, "type": normalized_type}
+    params["sort"] = normalized_sort
+    params["t"] = normalized_time
+    url = f"{base_url}?{urlencode(params)}"
+
+    async with async_playwright() as pw:
+        browser, context = await _launch_browser(pw)
+        page = await context.new_page()
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3500)
+
+            body_text = await page.evaluate("() => document.body?.innerText || ''")
+            if "You've been blocked by network security" in body_text:
+                return (
+                    "Reddit blocked this network/browser session. Try again later "
+                    "or use a different network/session."
+                )
+
+            results = await page.evaluate(
+                """
+                ({numResults, resultType}) => {
+                    const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                    const absolutize = (href) => {
+                        try { return new URL(href, location.href).href; }
+                        catch(e) { return href || ''; }
+                    };
+                    const rows = [];
+                    const seen = new Set();
+                    const anchors = [...document.querySelectorAll('a[href]')];
+
+                    for (const a of anchors) {
+                        if (rows.length >= numResults) break;
+                        const href = absolutize(a.getAttribute('href') || a.href);
+                        const isPost = /\\/comments\\//.test(href);
+                        const isCommunity = /\\/r\\/[A-Za-z0-9_]+\\/?$/.test(href);
+                        const isUser = /\\/user\\/[A-Za-z0-9_-]+\\/?$/.test(href);
+                        if (resultType === 'communities' && !isCommunity) continue;
+                        else if (resultType === 'people' && !isUser) continue;
+                        else if (!['communities', 'people'].includes(resultType) && !isPost) continue;
+                        if (seen.has(href)) continue;
+
+                        const container = a.closest('search-telemetry-tracker, shreddit-post, article, div') || a.parentElement;
+                        const lines = (container?.innerText || a.innerText || '')
+                            .split(/\\n+/)
+                            .map(clean)
+                            .filter(Boolean)
+                            .slice(0, 18);
+                        let title = clean(a.innerText || a.getAttribute('aria-label'));
+                        if (!title || title.length < 4 || title.length > 220) {
+                            title = lines.find((line) =>
+                                line.length >= 4 &&
+                                line.length <= 220 &&
+                                !/^r\\//.test(line) &&
+                                !/^u\\//.test(line) &&
+                                !/^\\d+\\s*(votes?|comments?)$/i.test(line)
+                            ) || '';
+                        }
+                        if (!title) continue;
+
+                        const source = lines.find((line) => /^r\\//.test(line) || /^u\\//.test(line)) || '';
+                        const score = lines.find((line) => /\\b(votes?|upvotes?)\\b/i.test(line)) || '';
+                        const comments = lines.find((line) => /\\bcomments?\\b/i.test(line)) || '';
+                        const date = lines.find((line) => /\\b(ago|전)$/.test(line) || /\\d+[hdmy]\\b/i.test(line)) || '';
+                        const snippet = lines.find((line) =>
+                            line !== title &&
+                            line !== source &&
+                            line.length > 35 &&
+                            !/\\b(votes?|comments?)\\b/i.test(line)
+                        ) || '';
+
+                        seen.add(href);
+                        rows.push({title, url: href, source, date, score, comments, snippet});
+                    }
+                    return rows;
+                }
+                """,
+                {"numResults": num_results, "resultType": normalized_type},
+            )
+
+            header = f"Reddit Search Results for: {query}"
+            if subreddit:
+                header += f" (r/{subreddit.strip().strip('/')})"
+            header += f" ({normalized_type}, {normalized_sort}, {normalized_time})"
+
+            return _format_search_results(
+                header,
+                results,
+                num_results,
+                f"No Reddit results found for: {query}",
+            )
+
+        except Exception as e:
+            return f"Reddit search failed: {e}"
+
+        finally:
+            await browser.close()
+
+
+@mcp.tool()
+async def reddit_search(
+    query: str,
+    num_results: int = 5,
+    subreddit: str = "",
+    result_type: str = "posts",
+    sort: str = "relevance",
+    time_range: str = "all",
+) -> str:
+    """Search Reddit posts, comments, communities, media, or people.
+
+    Sample prompts that trigger this tool:
+        - "Search Reddit for LangChain complaints this month"
+        - "Find top posts in r/Python about asyncio"
+        - "Search Reddit communities for local LLM"
+
+    Args:
+        query: Search query string.
+        num_results: Number of results to return (default 5, max 10).
+        subreddit: Optional subreddit name to restrict search.
+        result_type: "posts", "comments", "communities", "media", or "people".
+        sort: "relevance", "hot", "top", "new", or "comments".
+        time_range: "hour", "day", "week", "month", "year", or "all".
+    """
+    num_results = max(1, min(num_results, 10))
+    return await _do_reddit_search(
+        query,
+        num_results=num_results,
+        subreddit=subreddit or None,
+        result_type=result_type,
+        sort=sort,
+        time_range=time_range,
+    )
+
+
+async def _do_github_discussions_search(query: str, num_results: int = 5) -> str:
+    """Search GitHub discussions through rendered HTML when available."""
+    url = f"https://github.com/search?{urlencode({'q': query, 'type': 'discussions'})}"
+    async with async_playwright() as pw:
+        browser, context = await _launch_browser(pw)
+        page = await context.new_page()
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+            body_text = await page.evaluate("() => document.body?.innerText || ''")
+            if "You must be signed in to search code" in body_text:
+                return "GitHub discussions search requires signing in from this environment."
+
+            results = await page.evaluate(
+                """
+                (numResults) => {
+                    const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                    const rows = [];
+                    const seen = new Set();
+                    for (const a of document.querySelectorAll('a[href*="/discussions/"]')) {
+                        if (rows.length >= numResults) break;
+                        const title = clean(a.innerText || a.getAttribute('aria-label'));
+                        const href = new URL(a.getAttribute('href'), location.href).href;
+                        if (!title || title.length < 4 || seen.has(href)) continue;
+                        const parent = a.closest('div, li, article') || a.parentElement;
+                        const lines = (parent?.innerText || '').split(/\\n+/).map(clean).filter(Boolean);
+                        const source = href.replace('https://github.com/', '').split('/discussions/')[0];
+                        const snippet = lines.find((line) => line !== title && line.length > 30) || '';
+                        seen.add(href);
+                        rows.push({title, url: href, source, snippet});
+                    }
+                    return rows;
+                }
+                """,
+                num_results,
+            )
+
+            return _format_search_results(
+                f"GitHub Discussions Search Results for: {query}",
+                results,
+                num_results,
+                f"No GitHub discussion results found for: {query}",
+            )
+
+        except Exception as e:
+            return f"GitHub discussions search failed: {e}"
+
+        finally:
+            await browser.close()
+
+
+async def _do_github_search(
+    query: str,
+    search_type: str = "repositories",
+    num_results: int = 5,
+    sort: str = "",
+    order: str = "desc",
+) -> str:
+    """Search GitHub through public no-key search endpoints where possible."""
+    normalized_type = GITHUB_SEARCH_TYPE_MAP.get(search_type, "repositories")
+    if normalized_type == "discussions":
+        return await _do_github_discussions_search(query, num_results=num_results)
+
+    endpoint = {
+        "repositories": "repositories",
+        "issues": "issues",
+        "pullrequests": "issues",
+        "users": "users",
+    }.get(normalized_type, "repositories")
+
+    api_query = query
+    if normalized_type == "issues" and "type:" not in api_query and "is:" not in api_query:
+        api_query = f"{api_query} is:issue"
+    elif normalized_type == "pullrequests" and "type:" not in api_query and "is:" not in api_query:
+        api_query = f"{api_query} is:pr"
+
+    params = {"q": api_query, "per_page": str(num_results)}
+    if sort:
+        params["sort"] = sort
+        params["order"] = order if order in {"asc", "desc"} else "desc"
+    api_url = f"https://api.github.com/search/{endpoint}?{urlencode(params)}"
+
+    async with async_playwright() as pw:
+        request_context = await pw.request.new_context(
+            user_agent=USER_AGENT,
+            extra_http_headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            response = await request_context.get(api_url, timeout=30000)
+            if not response.ok:
+                text = await response.text()
+                return f"GitHub search failed ({response.status}): {_squash_text(text, 500)}"
+
+            data = await response.json()
+            items = data.get("items", [])
+            if not items and sort:
+                fallback_params = {"q": api_query, "per_page": str(num_results)}
+                fallback_url = f"https://api.github.com/search/{endpoint}?{urlencode(fallback_params)}"
+                fallback_response = await request_context.get(fallback_url, timeout=30000)
+                if fallback_response.ok:
+                    data = await fallback_response.json()
+                    items = data.get("items", [])
+
+            results = []
+            label = {
+                "repositories": "Repositories",
+                "issues": "Issues",
+                "pullrequests": "Pull Requests",
+                "users": "Users",
+            }.get(normalized_type, "Results")
+
+            if not items and normalized_type in {"issues", "pullrequests"}:
+                return (
+                    f"GitHub {label} search returned no public no-key results for: {query}. "
+                    "GitHub may require a signed-in session for this search vertical in "
+                    "the current environment."
+                )
+
+            for item in items[:num_results]:
+                if normalized_type == "repositories":
+                    results.append({
+                        "title": item.get("full_name", ""),
+                        "url": item.get("html_url", ""),
+                        "snippet": item.get("description") or "",
+                        "language": item.get("language") or "",
+                        "stars": f"{item.get('stargazers_count', 0)} stars",
+                        "forks": f"{item.get('forks_count', 0)} forks",
+                        "license": (item.get("license") or {}).get("spdx_id") or "",
+                    })
+                elif normalized_type in {"issues", "pullrequests"}:
+                    repository = item.get("repository_url", "").replace("https://api.github.com/repos/", "")
+                    results.append({
+                        "title": item.get("title", ""),
+                        "url": item.get("html_url", ""),
+                        "source": repository,
+                        "date": item.get("updated_at", ""),
+                        "comments": f"{item.get('comments', 0)} comments",
+                        "snippet": item.get("body") or "",
+                    })
+                elif normalized_type == "users":
+                    results.append({
+                        "title": item.get("login", ""),
+                        "url": item.get("html_url", ""),
+                        "source": item.get("type", ""),
+                        "score": f"score {item.get('score', 0):.2f}",
+                        "snippet": item.get("url", ""),
+                    })
+
+            return _format_search_results(
+                f"GitHub {label} Search Results for: {query}",
+                results,
+                num_results,
+                f"No GitHub {label.lower()} found for: {query}",
+            )
+
+        except Exception as e:
+            return f"GitHub search failed: {e}"
+
+        finally:
+            await request_context.dispose()
+
+
+@mcp.tool()
+async def github_search(
+    query: str,
+    search_type: str = "repositories",
+    num_results: int = 5,
+    sort: str = "",
+    order: str = "desc",
+) -> str:
+    """Search GitHub without an API key using public GitHub search surfaces.
+
+    Sample prompts that trigger this tool:
+        - "Search GitHub repositories for MCP browser automation"
+        - "Find GitHub issues about Playwright timeout"
+        - "Search GitHub pull requests for FastMCP"
+
+    Args:
+        query: GitHub search query. GitHub search qualifiers are supported.
+        search_type: "repositories", "issues", "pullrequests", "users", or "discussions".
+        num_results: Number of results to return (default 5, max 10).
+        sort: Optional GitHub sort field, such as "stars", "forks", "updated", or "comments".
+        order: "desc" or "asc" when sort is provided.
+    """
+    num_results = max(1, min(num_results, 10))
+    return await _do_github_search(
+        query,
+        search_type=search_type,
+        num_results=num_results,
+        sort=sort,
+        order=order,
+    )
 
 
 # ---------------------------------------------------------------------------
